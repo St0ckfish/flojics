@@ -1,58 +1,93 @@
 # Database Design
 
-Planned MySQL schema for the escalation slice. Migrations are not written yet.
+MySQL 8 schema for the escalation slice. The PDF treats users, customers, agents, and tickets as already present. That is a product scenario, not a dump we received, so this repo creates those tables with a small, reviewable shape and then adds escalation.
 
-## Existing context
+No `.sql` dump is committed. Reviewers get the same database with:
 
-The platform already has users, customers, agents, and tickets. This slice **modifies** `tickets` and **adds** `notification_logs`.
+```bash
+php artisan migrate --seed
+```
 
-## Tables
+## Entity relationship
 
-### `tickets` (modified)
+```
+users 1 ──────── < agents 1 ──────── < tickets
+                                      ^
+customers 1 ──────────────────────────┘
+                                      │
+                                      │ 1
+                                      ▼
+                              notification_logs
+```
+
+- A **customer** can have many tickets.
+- An **agent** is a `users` row with a department. A ticket may be unassigned (`agent_id` nullable).
+- A **ticket** can have many **notification_logs** (one row per channel per escalation attempt).
+
+## Tables created
+
+Laravel already ships `users`, `sessions`, `jobs`, and `cache`. This slice adds four tables.
+
+### `customers`
 
 | Column | Type | Notes |
 |---|---|---|
-| `id` | bigint PK | Existing |
-| `subject` | string | Existing |
-| `priority` | string / enum | Existing (`low`, `medium`, `high`, `urgent`) |
-| `status` | enum | **Add / tighten:** `open`, `in_progress`, `escalated`, `closed` |
-| `escalated_at` | timestamp nullable | **Add.** Set once when the ticket is first escalated |
-| `timestamps` | | Existing |
+| `id` | bigint PK | |
+| `name` | string | |
+| `email` | string unique | Who we notify about, later |
+| `phone` | string nullable | Ready for SMS / WhatsApp |
+| `timestamps` | | |
 
-Constraints:
+### `agents`
 
-- `status` default `open`
-- index on `tickets(status)` for staff filters and future SLA jobs
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint PK | |
+| `user_id` | FK → `users.id` | `cascadeOnDelete()` |
+| `department` | string nullable | Support, Billing, … |
+| `timestamps` | | |
 
-### `notification_logs` (new)
+### `tickets`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint PK | Shown on the ticket page |
+| `customer_id` | FK → `customers.id` | `cascadeOnDelete()` |
+| `agent_id` | FK → `agents.id` nullable | `nullOnDelete()` |
+| `subject` | string | |
+| `description` | text nullable | |
+| `priority` | string | `low`, `medium`, `high`, `urgent` (default `medium`) |
+| `status` | string | `open`, `in_progress`, `escalated`, `closed` (default `open`) |
+| `escalated_at` | timestamp nullable | Set when status first becomes escalated |
+| `timestamps` | | |
+
+Indexes: `tickets(status)`, `tickets(priority)`.
+
+`status` and `priority` are strings, not MySQL `ENUM`. PHP enums (`TicketStatus`, `TicketPriority`) enforce allowed values. That stays compatible with SQLite in tests and avoids an `ALTER TABLE` when a new status is added.
+
+### `notification_logs`
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | bigint PK | |
 | `ticket_id` | FK → `tickets.id` | `cascadeOnDelete()` |
-| `channel` | string(32) | `email`, `slack`, later `whatsapp`, `sms`, ... |
-| `status` | enum | `pending`, `sent`, `failed` |
-| `attempts` | unsigned int | default `0` |
-| `error_message` | text nullable | Last exception message |
+| `channel` | string | `email`, `slack`, later `whatsapp`… |
+| `status` | string | `pending`, `sent`, `failed` |
+| `attempts` | unsigned tinyint | Default `0`. Incremented by the queue job |
+| `error_message` | text nullable | Last exception |
 | `sent_at` | timestamp nullable | Set when status becomes `sent` |
 | `timestamps` | | |
 
-Constraints and indexes:
+Indexes: `(ticket_id, channel)`, `status`.
 
-- `notification_logs(ticket_id)`
-- `notification_logs(status)`
-- composite `notification_logs(ticket_id, channel)` for “latest email attempt”
-
-## Relationships
-
-```
-tickets 1 ───────< notification_logs
-```
-
-A ticket can have many log rows (one per channel, and historically more if re-escalation is allowed later).
+`channel` is a free string so a new channel does not need a schema change.
 
 ## Why this shape
 
 - **`escalated_at` on the ticket** is the business timestamp the UI shows.
-- **`notification_logs`** is the operational record: which channel, how many tries, what failed.
-- Keeping channel as a string (not a MySQL enum of two values) avoids a migration every time WhatsApp or Teams is added.
+- **`notification_logs`** is the operational outbox: which channel, how many tries, what failed.
+- Escalating the ticket and sending notifications are separate writes. A downed Slack webhook must not roll back `status = escalated`.
+
+## Seed data
+
+`DatabaseSeeder` creates one test user, four customers, three agents, and **ten tickets** across open / in progress / unassigned / escalated / closed so the reviewer can open a ticket and press Escalate without inserting rows by hand.

@@ -23,7 +23,7 @@ These are the questions I would normally ask the Product Owner.
 
 | Topic | Assumption |
 |---|---|
-| Existing domain | Users, customers, agents, and tickets already exist. This slice only adds escalation + notification logs. |
+| Existing domain | The PDF describes an existing Help Desk with users, customers, agents, and tickets. That is a product scenario, not a database we were given. This repo therefore ships **minimal tables** for those entities plus escalation fields, so `migrate --seed` is enough to review the feature. |
 | Auth | The API is treated as an internal staff endpoint. Auth / policies can be added without changing the action or channels. |
 | Channel selection | Request body accepts `channels: ("email" \| "slack")[]`. If omitted, both Email and Slack are used. |
 | Recipients | Email goes to a configured operations mailbox (`MAIL_FROM` / env). Slack goes to `SLACK_BOT_USER_DEFAULT_CHANNEL`. |
