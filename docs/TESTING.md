@@ -6,7 +6,7 @@ Pest covers the cases the PDF asked for. Feature tests use `RefreshDatabase` and
 
 | Case | Where | Expected |
 |---|---|---|
-| **Successful escalation** | `TicketEscalationTest` | `200`. `status=escalated`, `escalated_at` set, one log per channel, `Notification::fake()` sees two on-demand sends. |
+| **Successful escalation** | `TicketEscalationTest` | `200`. `status=escalated`, `escalated_at` set, one pending log per channel, two jobs queued. Sends happen in the worker, not in the HTTP response. |
 | **Invalid ticket** | `TicketEscalationTest` | Unknown id → `404`. |
 | **Already escalated** | `TicketEscalationTest` | `409`. No extra logs. |
 | **Validation** | `TicketEscalationTest` | Channel `fax` → `422`. Ticket stays open. |
@@ -14,6 +14,7 @@ Pest covers the cases the PDF asked for. Feature tests use `RefreshDatabase` and
 | **Retry success** | `NotificationRetryTest` | First `send()` throws, second succeeds. `attempts=2`, `status=sent`. |
 | **Retry exhausted** | `NotificationRetryTest` | Three throws + `failed()`. `status=failed`, `error_message` stored. |
 | **Job dispatch** | `TicketEscalationTest` | `Queue::fake()` — one job when only `email` is requested. |
+| **Job send** | `TicketEscalationTest` | Job `handle()` + `Notification::fake()` — both channels become `sent`. |
 | **Show ticket** | `TicketEscalationTest` | `GET /api/tickets/{id}` returns subject and status. |
 | **Schema / relations** | `TicketSchemaTest` | Customer + optional agent + logs. |
 
@@ -45,5 +46,6 @@ Manual check with the seeded database (MySQL `flojics`):
 4. Email (MAIL_MAILER=log) should become `sent` after the worker runs
 5. Slack without a token should retry 3 times and finish `failed` with a clear error — that is the required failure path, not a bug
 6. `POST /api/tickets/7/escalate` — already escalated in the seeder → `409`
+7. UI: [http://localhost:5173/tickets/1](http://localhost:5173/tickets/1) — Escalate, badges, logs. Ticket `7` shows the button disabled. Ticket `9999` shows the compact 404.
 
 CI (`.github/workflows/ci.yml`) runs Pint, Larastan, and Pest on every push.

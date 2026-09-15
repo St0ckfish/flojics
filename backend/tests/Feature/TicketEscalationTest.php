@@ -4,6 +4,7 @@ use App\Enums\NotificationLogStatus;
 use App\Enums\TicketStatus;
 use App\Jobs\DispatchEscalationNotificationJob;
 use App\Models\Ticket;
+use App\NotificationChannels\EscalationChannelRegistry;
 use App\Notifications\TicketEscalatedNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Notification;
@@ -19,7 +20,7 @@ beforeEach(function () {
 });
 
 test('a ticket can be escalated and notifications are queued per channel', function () {
-    Notification::fake();
+    Queue::fake();
 
     $ticket = Ticket::factory()->create();
 
@@ -27,14 +28,38 @@ test('a ticket can be escalated and notifications are queued per channel', funct
         ->assertOk()
         ->assertJsonPath('data.id', $ticket->id)
         ->assertJsonPath('data.status', TicketStatus::Escalated->value)
-        ->assertJsonPath('data.notification_logs.0.status', NotificationLogStatus::Sent->value)
+        ->assertJsonPath('data.notification_logs.0.status', NotificationLogStatus::Pending->value)
         ->assertJsonCount(2, 'data.notification_logs');
 
     $ticket->refresh();
 
     expect($ticket->status)->toBe(TicketStatus::Escalated)
         ->and($ticket->escalated_at)->not->toBeNull()
-        ->and($ticket->notificationLogs)->toHaveCount(2);
+        ->and($ticket->notificationLogs)->toHaveCount(2)
+        ->and($ticket->notificationLogs->every(
+            fn ($log): bool => $log->status === NotificationLogStatus::Pending,
+        ))->toBeTrue();
+
+    Queue::assertPushed(DispatchEscalationNotificationJob::class, 2);
+});
+
+test('queued jobs send email and slack and mark logs sent', function () {
+    Notification::fake();
+
+    $ticket = Ticket::factory()->create();
+
+    $this->postJson("/api/tickets/{$ticket->id}/escalate")->assertOk();
+
+    $registry = app(EscalationChannelRegistry::class);
+
+    foreach ($ticket->fresh()->notificationLogs as $log) {
+        (new DispatchEscalationNotificationJob($ticket->id, $log->channel, $log->id))
+            ->handle($registry);
+    }
+
+    expect($ticket->fresh()->notificationLogs->every(
+        fn ($log): bool => $log->status === NotificationLogStatus::Sent && $log->sent_at !== null,
+    ))->toBeTrue();
 
     Notification::assertSentOnDemandTimes(TicketEscalatedNotification::class, 2);
 });

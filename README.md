@@ -93,7 +93,7 @@ bun install
 bun run dev
 ```
 
-Vite prints the local URL (usually [http://localhost:5173](http://localhost:5173)).
+Vite prints the local URL. Open [http://localhost:5173/tickets/1](http://localhost:5173/tickets/1). Seeded tickets are `1`–`10` (try `7` for the already-escalated `409`).
 
 ## Quality commands
 

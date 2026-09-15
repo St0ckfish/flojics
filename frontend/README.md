@@ -1,6 +1,8 @@
 # Frontend
 
-React + Vite + TypeScript starter for the Flojics ticket escalation UI.
+React + Vite + TypeScript app for the Flojics ticket page.
+
+Open [http://localhost:5173/tickets/1](http://localhost:5173/tickets/1) after `bun run dev`. The ticket id comes from the URL. Escalate calls `POST /api/tickets/{id}/escalate` and refreshes the GET cache.
 
 ## Scripts
 

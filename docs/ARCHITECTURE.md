@@ -25,6 +25,16 @@ backend/app/
 
 The frontend stays a separate Vite app. PHP does not go through Turborepo.
 
+```
+frontend/src/
+├── pages/TicketPage.tsx
+├── hooks/useTicket.ts
+├── hooks/useEscalateTicket.ts
+├── lib/api.ts                  # Axios client
+├── lib/ticket.ts               # Zod schemas + GET/POST
+└── components/                 # Status/priority badges, notification logs
+```
+
 ## Design decisions
 
 | Decision | Why |
@@ -94,4 +104,4 @@ No changes to the action, job, or controller.
 | `GET` | `/api/tickets/{id}` | Ticket + logs (for the React page) |
 | `POST` | `/api/tickets/{id}/escalate` | Escalates; optional `{ "channels": ["email"] }` |
 
-Frontend (next step): `TicketPage` + `useEscalateTicket` calling the POST and invalidating the GET.
+The React app reads the ticket id from `/tickets/:ticketId`. `useTicket` loads `GET /api/tickets/{id}`. `useEscalateTicket` posts, then writes the response into the query cache. Logs with `pending` status refetch every 3 seconds so a running `queue:work` shows sent/failed without a reload.
