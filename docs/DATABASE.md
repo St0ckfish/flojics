@@ -22,7 +22,7 @@ customers 1 ──────────────────────�
 
 - A **customer** can have many tickets.
 - An **agent** is a `users` row with a department. A ticket may be unassigned (`agent_id` nullable).
-- A **ticket** can have many **notification_logs** (one row per channel per escalation attempt).
+- A **ticket** can have many **notification_logs** (one row per channel per escalation; retries increment `attempts` on that row).
 
 ## Tables created
 

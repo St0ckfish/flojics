@@ -20,9 +20,9 @@ Pest covers the cases the PDF asked for. Feature tests use `RefreshDatabase` and
 
 ## How they are tested
 
-- `Notification::fake()` for the happy path (mail + Slack adapters).
+- `Queue::fake()` on the HTTP escalate path: the response has `pending` logs and the jobs are queued, not sent inline.
+- `Notification::fake()` when job `handle()` runs the real Email/Slack adapters.
 - Mockery `EscalationChannel` bound into `EscalationChannelRegistry` to simulate timeout / webhook / mailer failure without hitting the network.
-- `Queue::fake()` when the HTTP layer must not run the job inline.
 - Job `handle()` / `failed()` called directly to simulate Laravel's 3 attempts.
 
 ## Self-testing notes
@@ -38,14 +38,14 @@ cd backend
 
 Pint and Larastan passed on this machine. Feature tests use in-memory SQLite (`phpunit.xml`). They need the `pdo_sqlite` PHP extension (installed in CI). Without that extension they fail with `could not find driver` — that is an environment gap, not a failing assertion.
 
-Manual check with the seeded database (MySQL `flojics`):
+Manual check with a **fresh** MySQL seed (`php artisan migrate:fresh --seed`, database `flojics`):
 
 1. `php artisan serve` and `php artisan queue:work`
-2. `GET /api/tickets/1` — open ticket, empty logs
-3. `POST /api/tickets/1/escalate` — status escalated, two `notification_logs` rows
-4. Email (MAIL_MAILER=log) should become `sent` after the worker runs
+2. `GET /api/tickets/1` — open ticket, empty logs (ids 1–4 start open; 7 and 8 start escalated)
+3. `POST /api/tickets/1/escalate` — status escalated, two `notification_logs` rows (`pending` until the worker runs)
+4. Email (`MAIL_MAILER=log`) should become `sent` after the worker runs (written to `storage/logs/laravel.log`, not Gmail)
 5. Slack without a token should retry 3 times and finish `failed` with a clear error — that is the required failure path, not a bug
 6. `POST /api/tickets/7/escalate` — already escalated in the seeder → `409`
-7. UI: [http://localhost:5173/tickets/1](http://localhost:5173/tickets/1) — Escalate, badges, logs. Ticket `7` shows the button disabled. Ticket `9999` shows the compact 404.
+7. UI: [http://localhost:5173/tickets/4](http://localhost:5173/tickets/4) — Escalate, badges, logs. Ticket `7` shows the button disabled. Ticket `9999` shows the compact 404.
 
 CI (`.github/workflows/ci.yml`) runs Pint, Larastan, and Pest on every push.

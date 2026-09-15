@@ -7,8 +7,8 @@ How ticket escalation is built: one use-case, swappable channels, and Laravel's 
 ```
 backend/app/
 ├── Actions/EscalateTicketAction.php
-├── Enums/                      # TicketStatus, TicketPriority, EscalationChannelKey
-├── Exceptions/                 # 404 / 409 / unsupported channel
+├── Enums/                      # TicketStatus, TicketPriority, EscalationChannelKey, NotificationLogStatus
+├── Exceptions/                 # domain exceptions + ConfigureApiExceptions (compact JSON 404/409)
 ├── Http/
 │   ├── Controllers/Api/        # Thin: show ticket, escalate ticket
 │   ├── Requests/EscalateTicketRequest.php
@@ -32,7 +32,7 @@ frontend/src/
 ├── hooks/useEscalateTicket.ts
 ├── lib/api.ts                  # Axios client
 ├── lib/ticket.ts               # Zod schemas + GET/POST
-└── components/                 # Status/priority badges, notification logs
+└── components/                 # TicketNav (shadcn Select), badges, notification logs
 ```
 
 ## Design decisions

@@ -26,14 +26,14 @@ These are the questions I would normally ask the Product Owner.
 | Existing domain | The PDF describes an existing Help Desk with users, customers, agents, and tickets. That is a product scenario, not a database we were given. This repo therefore ships **minimal tables** for those entities plus escalation fields, so `migrate --seed` is enough to review the feature. |
 | Auth | The API is treated as an internal staff endpoint. Auth / policies can be added without changing the action or channels. |
 | Channel selection | Request body accepts `channels: ("email" \| "slack")[]`. If omitted, both Email and Slack are used. |
-| Recipients | Email goes to a configured operations mailbox (`MAIL_FROM` / env). Slack goes to `SLACK_BOT_USER_DEFAULT_CHANNEL`. |
+| Recipients | Email goes to `ESCALATION_MAIL_TO` (falls back to `MAIL_FROM_ADDRESS`). Slack goes to `SLACK_BOT_USER_DEFAULT_CHANNEL`. |
 | Ticket update | On escalate: `status = escalated`, `escalated_at = now()`. |
 | Already escalated | Return `409 Conflict`. No second notification storm. |
 | Missing ticket | Return `404`. |
 | Failure isolation | The ticket is persisted as escalated first. Each channel is an independent queued job. One channel failing does not undo the ticket or the other channel. |
 | Retry | Laravel queue job: `$tries = 3`, backoff `[10, 30, 60]` seconds. Final status and attempt count live on `notification_logs`. |
 | Queue | `QUEUE_CONNECTION=database` locally so retries are inspectable. Tests use `sync` / fakes. |
-| Frontend | Single ticket page. Ticket id comes from the URL. UI is functional, not a full design system. |
+| Frontend | Single ticket page. Ticket id comes from the URL. |
 | Database | MySQL 8 in development (Docker). Tests use in-memory SQLite. |
 
 ## Recommendations

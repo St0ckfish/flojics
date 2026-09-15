@@ -11,7 +11,7 @@ Escalate a ticket, persist `escalated_at`, and fan out Email + Slack with queued
 | API | Laravel 11, PHP 8.3, MySQL 8 |
 | Frontend | React 19, Vite, TypeScript |
 | UI | Tailwind CSS 4, shadcn |
-| Data | TanStack Query, Axios, Zod, React Hook Form |
+| Data | TanStack Query, Axios, Zod |
 | Quality | oxlint, Prettier, Husky, commitlint, lint-staged, Pint, Pest, Larastan |
 | CI | GitHub Actions (`frontend` + `backend` jobs) |
 
@@ -65,7 +65,7 @@ docs/        Requirements, architecture, database, testing
 docker compose up -d
 ```
 
-MySQL is on `127.0.0.1:3306` (`flojics` / `secret`). phpMyAdmin is on [http://localhost:8081](http://localhost:8081).
+MySQL 8.4 is on `127.0.0.1:3306` (`flojics` / `secret`). phpMyAdmin is on [http://localhost:8081](http://localhost:8081). If you use a local MySQL instead of Docker, a host password policy may reject `secret` — set `DB_PASSWORD` in `backend/.env` to a password your server accepts.
 
 ### 2. Backend
 
