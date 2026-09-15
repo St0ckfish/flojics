@@ -13,6 +13,8 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     config()->set('services.slack.notifications.bot_user_oauth_token', 'xoxb-test-token');
+    config()->set('services.slack.notifications.channel', '#escalations');
+    config()->set('escalation.slack_channel', '#escalations');
     config()->set('escalation.mail_to', 'ops@example.com');
 });
 
