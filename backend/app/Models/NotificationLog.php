@@ -8,7 +8,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Carbon;
 
 /**
+ * @property string $channel
  * @property NotificationLogStatus $status
+ * @property int $attempts
+ * @property string|null $error_message
  * @property Carbon|null $sent_at
  */
 class NotificationLog extends Model

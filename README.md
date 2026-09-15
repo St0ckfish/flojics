@@ -2,7 +2,7 @@
 
 Help Desk SaaS slice: escalate a ticket, record the escalation time, and notify through Email and Slack with automatic retries.
 
-This repository is scaffolded with production-style tooling. Feature code is the next step; the architecture is documented in `docs/`.
+Escalate a ticket, persist `escalated_at`, and fan out Email + Slack with queued retries. Architecture notes live in `docs/`.
 
 ## Stack
 
@@ -74,11 +74,11 @@ cd backend
 cp .env.example .env
 php artisan key:generate
 composer install
-php artisan migrate
+php artisan migrate --seed
 php artisan serve
 ```
 
-Queue worker (needed later for retries):
+Queue worker (required so Email/Slack retries actually run):
 
 ```bash
 php artisan queue:work

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\TicketPriority;
 use App\Enums\TicketStatus;
+use App\Exceptions\TicketAlreadyEscalatedException;
 use Database\Factories\TicketFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -46,6 +47,17 @@ class Ticket extends Model
     public function isEscalated(): bool
     {
         return $this->status === TicketStatus::Escalated;
+    }
+
+    public function markEscalated(): void
+    {
+        if ($this->isEscalated()) {
+            throw new TicketAlreadyEscalatedException($this->id);
+        }
+
+        $this->status = TicketStatus::Escalated;
+        $this->escalated_at = now();
+        $this->save();
     }
 
     /**

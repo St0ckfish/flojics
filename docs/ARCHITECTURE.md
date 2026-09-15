@@ -1,46 +1,43 @@
 # Architecture
 
-Planned design for the escalation slice. Application classes are not implemented yet; this document is the contract the code will follow.
+How ticket escalation is built: one use-case, swappable channels, and Laravel's queue for retries.
 
 ## Folder structure
 
 ```
-flojics/
-├── backend/                          # Laravel 11 API
-│   ├── app/
-│   │   ├── Actions/                  # One use-case per class
-│   │   ├── Http/Controllers/Api/     # Thin HTTP adapters
-│   │   ├── Http/Requests/            # Form Request validation
-│   │   ├── Jobs/                     # Queued send + retry
-│   │   ├── Models/
-│   │   ├── NotificationChannels/
-│   │   │   └── Contracts/            # EscalationChannel interface
-│   │   └── Notifications/            # Laravel Notification (email/slack payload)
-│   └── tests/Feature/                # Pest
-├── frontend/                         # React + Vite + TypeScript
-│   └── src/
-│       ├── api/                      # HTTP clients
-│       ├── components/ui/            # shadcn primitives
-│       ├── hooks/                    # TanStack Query mutations
-│       ├── lib/                      # shared utils
-│       └── pages/                    # Ticket page
-├── docs/
-└── .github/workflows/ci.yml
+backend/app/
+├── Actions/EscalateTicketAction.php
+├── Enums/                      # TicketStatus, TicketPriority, EscalationChannelKey
+├── Exceptions/                 # 404 / 409 / unsupported channel
+├── Http/
+│   ├── Controllers/Api/        # Thin: show ticket, escalate ticket
+│   ├── Requests/EscalateTicketRequest.php
+│   └── Resources/              # Stable JSON for the React page
+├── Jobs/DispatchEscalationNotificationJob.php
+├── Models/
+├── NotificationChannels/
+│   ├── Contracts/EscalationChannel.php
+│   ├── EscalationChannelRegistry.php
+│   ├── EmailEscalationChannel.php
+│   └── SlackEscalationChannel.php
+└── Notifications/TicketEscalatedNotification.php
 ```
 
-PHP and JavaScript do not share a bundler, so this is a polyglot repo rather than Turborepo. Quality gates still run together in CI.
+The frontend stays a separate Vite app. PHP does not go through Turborepo.
 
 ## Design decisions
 
 | Decision | Why |
 |---|---|
-| **Action class** (`EscalateTicketAction`) | Keeps the controller thin. The HTTP layer validates and calls one method. The same action can be reused from a command or an SLA scheduler later. |
-| **Strategy + registry for channels** | Email and Slack are different adapters behind `EscalationChannel`. New channels do not change the action, job, or controller (Open/Closed). |
-| **Queue jobs for send + retry** | Do not invent retry loops. Laravel already provides `$tries`, `backoff()`, and `failed()`. |
-| **`notification_logs` as the outbox** | Every dispatch has a row before the job runs. Final status, attempts, and error message are queryable. |
-| **Escalate the ticket first** | Status change is the business event. Notifications are a side effect. A downed Slack webhook must not leave the ticket stuck on `open`. |
-| **Form Request** | Channel list validation stays out of the controller. |
-| **Pest + Pint + Larastan** | Tests, style, and static analysis are first-class, same as the frontend oxlint / TypeScript / build pipeline. |
+| **Action, not a fat controller** | `EscalateTicketAction` is the use-case. HTTP only validates and maps exceptions. The same action can be called later from an SLA command. |
+| **Strategy + registry** | Email and Slack implement `EscalationChannel`. The job and action never `switch` on channel names. Adding WhatsApp is a new class + one registry line (Open/Closed). |
+| **Domain exceptions** | `TicketNotFound` / `TicketAlreadyEscalated` stay HTTP-agnostic. `ConfigureApiExceptions` maps them to 404 / 409, and turns Laravel route-binding 404s into the same compact JSON (no debug stack). |
+| **`lockForUpdate` + transaction** | Two Escalate clicks cannot both create a second wave of jobs. |
+| **Escalate, then notify** | Status and `escalated_at` commit first. Jobs use `afterCommit()`. A downed Slack API cannot roll the ticket back to `open`. |
+| **One job per channel** | Email retry does not block Slack. Each `notification_logs` row is its own outbox entry. |
+| **Laravel `$tries` / `backoff()`** | No hand-rolled retry loop. `$tries = 3`, backoff `10s / 30s / 60s`, `failed()` writes the final error. |
+| **String columns + PHP enums** | Compatible with SQLite tests; no `ALTER TABLE` to add a channel. |
+| **Form Request + API Resource** | Validation and response shape stay out of the controller. |
 
 ## Notification architecture
 
@@ -48,56 +45,53 @@ PHP and JavaScript do not share a bundler, so this is a polyglot repo rather tha
 POST /api/tickets/{id}/escalate
         │
         ▼
-EscalateTicketRequest   (validate id + channels)
+EscalateTicketRequest          channels[] optional, default email+slack
         │
         ▼
-EscalateTicketAction
-        │  1. lock ticket, reject 404 / 409
-        │  2. status = escalated, escalated_at = now()
-        │  3. for each channel:
-        │        create notification_logs (pending, attempts=0)
-        │        dispatch DispatchEscalationNotificationJob
-        ▼
-DispatchEscalationNotificationJob   (ShouldQueue, tries=3)
+EscalateTicketAction           lock → markEscalated() → log + dispatch
         │
         ▼
-EscalationChannelRegistry.resolve(channel)
+DispatchEscalationNotificationJob   tries=3, afterCommit
         │
-        ├── EmailEscalationChannel
-        └── SlackEscalationChannel
+        ▼
+EscalationChannelRegistry.resolve(key)
+        │
+        ├── EmailEscalationChannel  → TicketEscalatedNotification (mail)
+        └── SlackEscalationChannel  → TicketEscalatedNotification (slack)
 ```
 
-Each channel `send()` throws on failure. The job increments `attempts`, marks `sent` on success, and `failed()` writes the final error after retries are exhausted.
+`send()` throws on transport failure (missing Slack token, mailer exception, timeout). The job increments `attempts` first. Success sets `sent` + `sent_at`. After three failures Laravel calls `failed()` and the log becomes `failed` with `error_message`.
 
-Laravel Notifications (mail / Slack Block Kit) live behind the channel adapters so the registry stays easy to test and mock.
+Laravel Notifications stay behind the adapters so Pest can `Notification::fake()` or swap the registry with a Mockery channel.
 
 ## Retry strategy
 
 | Setting | Value |
 |---|---|
-| Max attempts | `public int $tries = 3` |
-| Backoff | `10s, 30s, 60s` |
-| Success | `notification_logs.status = sent`, `sent_at = now()` |
-| Exhausted | `failed()` sets `status = failed` and stores `error_message` |
-| Isolation | One job per ticket + channel. Email retry does not block Slack. |
+| Max attempts | `$tries = 3` |
+| Backoff | `10`, `30`, `60` seconds |
+| Success | `notification_logs.status = sent` |
+| Exhausted | `failed()` → `status = failed` |
+| Isolation | One queued job per ticket + channel |
 
-This covers the required failure examples (mailer down, Slack webhook/API error, timeout) without custom retry infrastructure.
+This covers email unavailable, Slack webhook/token failure, and timeouts without custom retry infrastructure. Run `php artisan queue:work` so retries actually happen (`QUEUE_CONNECTION=database`).
 
 ## Adding a new channel
 
 Example: WhatsApp.
 
-1. Add `app/NotificationChannels/WhatsAppEscalationChannel.php` implementing `EscalationChannel` (`key(): 'whatsapp'`).
-2. Register it in the `EscalationChannelRegistry` binding in `AppServiceProvider`.
-3. Allow `'whatsapp'` in `EscalateTicketRequest`.
+1. Add `WhatsAppEscalationChannel` implementing `EscalationChannel` (`key(): 'whatsapp'`).
+2. Register it in the `EscalationChannelRegistry` singleton in `AppServiceProvider`.
+3. Add `WhatsApp = 'whatsapp'` to `EscalationChannelKey`.
 4. Add a Pest case that mocks the new channel.
 
-No changes to the action, job, controller, or frontend mutation beyond sending the new key if the UI exposes it.
+No changes to the action, job, or controller.
 
-## Frontend structure (planned)
+## HTTP surface
 
-- `src/pages/TicketPage.tsx` — Ticket ID, subject, priority, status, escalation date, Escalate button.
-- `src/hooks/useEscalateTicket.ts` — `useMutation` → `POST /api/tickets/{id}/escalate`, then invalidate the ticket query.
-- shadcn `Badge` for Open / Escalated.
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/tickets/{id}` | Ticket + logs (for the React page) |
+| `POST` | `/api/tickets/{id}/escalate` | Escalates; optional `{ "channels": ["email"] }` |
 
-The current frontend is a clean Vite starter plus this folder layout and tooling. Feature UI is intentionally not written yet.
+Frontend (next step): `TicketPage` + `useEscalateTicket` calling the POST and invalidating the GET.

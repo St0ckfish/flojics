@@ -1,56 +1,49 @@
 # Testing
 
-Feature tests are not implemented yet. This is the case list the Pest suite will cover, plus how they will be self-tested.
+Pest covers the cases the PDF asked for. Feature tests use `RefreshDatabase` and SQLite in memory (see `phpunit.xml`). CI installs `pdo_sqlite`.
 
 ## Test cases
 
-| Case | Expected |
-|---|---|
-| **Successful escalation** | `200/201`. Ticket `status=escalated`, `escalated_at` set. One `notification_logs` row per requested channel starts as `pending` (or `sent` when the queue is `sync` and channels succeed). |
-| **Invalid ticket** | Unknown id → `404`. No log rows. |
-| **Already escalated** | Second `POST` → `409`. No extra jobs. |
-| **Validation** | Unknown channel key → `422`. |
-| **Notification failure** | Channel `send()` throws. Log stays `pending`/`failed` depending on attempt number. Ticket remains escalated. |
-| **Retry success** | First `send()` throws, second succeeds. `attempts=2`, `status=sent`, `sent_at` set. |
-| **Retry exhausted** | All 3 attempts throw. Job `failed()` sets `status=failed` and `error_message`. |
-| **Channel isolation** | Email throws, Slack succeeds. Email log failed/retrying; Slack log sent. |
+| Case | Where | Expected |
+|---|---|---|
+| **Successful escalation** | `TicketEscalationTest` | `200`. `status=escalated`, `escalated_at` set, one log per channel, `Notification::fake()` sees two on-demand sends. |
+| **Invalid ticket** | `TicketEscalationTest` | Unknown id → `404`. |
+| **Already escalated** | `TicketEscalationTest` | `409`. No extra logs. |
+| **Validation** | `TicketEscalationTest` | Channel `fax` → `422`. Ticket stays open. |
+| **Notification failure** | `NotificationRetryTest` | Mock `send()` throws. Ticket stays escalated. Log `pending`, `attempts=1`. |
+| **Retry success** | `NotificationRetryTest` | First `send()` throws, second succeeds. `attempts=2`, `status=sent`. |
+| **Retry exhausted** | `NotificationRetryTest` | Three throws + `failed()`. `status=failed`, `error_message` stored. |
+| **Job dispatch** | `TicketEscalationTest` | `Queue::fake()` — one job when only `email` is requested. |
+| **Show ticket** | `TicketEscalationTest` | `GET /api/tickets/{id}` returns subject and status. |
+| **Schema / relations** | `TicketSchemaTest` | Customer + optional agent + logs. |
 
-## How they will be tested
+## How they are tested
 
-- Pest + `pestphp/pest-plugin-laravel`
-- `Illuminate\Support\Facades\Notification::fake()` for mail/Slack payloads
-- A mock `EscalationChannel` registered in the registry to simulate timeouts and webhook errors
-- `Queue::fake()` / `Bus::fake()` to assert a job is dispatched per channel
-- `Queue::partialMock()` or a real fake job `failed()` call for the exhausted path
-- HTTP tests against `POST /api/tickets/{id}/escalate`
-- SQLite in-memory (`phpunit.xml`) so CI does not need MySQL
+- `Notification::fake()` for the happy path (mail + Slack adapters).
+- Mockery `EscalationChannel` bound into `EscalationChannelRegistry` to simulate timeout / webhook / mailer failure without hitting the network.
+- `Queue::fake()` when the HTTP layer must not run the job inline.
+- Job `handle()` / `failed()` called directly to simulate Laravel's 3 attempts.
 
 ## Self-testing notes
 
-After implementation, the checks below should be run locally before opening a PR:
+Ran locally after implementation:
 
 ```bash
-# backend
 cd backend
-composer lint
-composer analyse
-composer test
-
-# frontend
-cd frontend
-bun run lint
-bun run typecheck
-bun run build
+./vendor/bin/pint --test
+./vendor/bin/phpstan analyse --memory-limit=1G
+./vendor/bin/pest
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same commands on every push and pull request.
+Pint and Larastan passed on this machine. Feature tests use in-memory SQLite (`phpunit.xml`). They need the `pdo_sqlite` PHP extension (installed in CI). Without that extension they fail with `could not find driver` — that is an environment gap, not a failing assertion.
 
-Manual smoke test (after the feature is built):
+Manual check with the seeded database (MySQL `flojics`):
 
-1. `docker compose up -d` and migrate
-2. Open the ticket page, confirm fields render
-3. Click Escalate — status and escalation date update without a full reload
-4. Stop the mailer / point Slack at a bad token — confirm three attempts and a `failed` row in `notification_logs`
-5. Restore the channel — confirm a later ticket can still send
+1. `php artisan serve` and `php artisan queue:work`
+2. `GET /api/tickets/1` — open ticket, empty logs
+3. `POST /api/tickets/1/escalate` — status escalated, two `notification_logs` rows
+4. Email (MAIL_MAILER=log) should become `sent` after the worker runs
+5. Slack without a token should retry 3 times and finish `failed` with a clear error — that is the required failure path, not a bug
+6. `POST /api/tickets/7/escalate` — already escalated in the seeder → `409`
 
-Current repo state: Laravel / Pest smoke tests and frontend lint/build only. Escalation cases will be added with the feature code.
+CI (`.github/workflows/ci.yml`) runs Pint, Larastan, and Pest on every push.
