@@ -1,6 +1,6 @@
 # Testing
 
-Pest covers the cases the PDF asked for. Feature tests use `RefreshDatabase` and SQLite in memory (see `phpunit.xml`). CI installs `pdo_sqlite`.
+Pest covers the cases the PDF asked for. Local Feature tests use `RefreshDatabase` and SQLite in memory (`phpunit.xml`). GitHub Actions runs the same suite against MySQL 8.4 so `lockForUpdate` and the unique outbox index are exercised on the required engine.
 
 ## Test cases
 
@@ -9,25 +9,27 @@ Pest covers the cases the PDF asked for. Feature tests use `RefreshDatabase` and
 | **Successful escalation** | `TicketEscalationTest` | `200`. `status=escalated`, `escalated_at` set, one pending log per channel, two jobs queued. Sends happen in the worker, not in the HTTP response. |
 | **Invalid ticket** | `TicketEscalationTest` | Unknown id → `404`. |
 | **Already escalated** | `TicketEscalationTest` | `409`. No extra logs. |
-| **Validation** | `TicketEscalationTest` | Channel `fax` → `422`. Ticket stays open. |
-| **Notification failure** | `NotificationRetryTest` | Mock `send()` throws. Ticket stays escalated. Log `pending`, `attempts=1`. |
-| **Retry success** | `NotificationRetryTest` | First `send()` throws, second succeeds. `attempts=2`, `status=sent`. |
-| **Retry exhausted** | `NotificationRetryTest` | Three throws + `failed()`. `status=failed`, `error_message` stored. |
-| **Job dispatch** | `TicketEscalationTest` | `Queue::fake()` — one job when only `email` is requested. |
+| **Validation** | `TicketEscalationTest` | Channel `fax` or `["email","email"]` → `422`. Ticket stays open. |
+| **Unique outbox** | `TicketSchemaTest` | A second log for the same ticket + channel raises `UniqueConstraintViolationException`. |
+| **Selected channels** | `TicketEscalationTest` | `channels: ["email"]` → one job. |
+| **Notification failure** | `NotificationRetryTest` | `FakeFlakyChannel` throws. Ticket stays escalated. Log `pending`, `attempts=1`. |
+| **Retry success** | `NotificationRetryTest` | Fail, fail, success. `attempts=3`, `status=sent`, `sent_at` set, `error_message` cleared. |
+| **Retry exhausted** | `NotificationRetryTest` | Three throws + `failed()`. `status=failed`, last error stored. A fourth `handle()` does not send. |
+| **Job replay** | `NotificationRetryTest` | A `sent` log is not delivered again. |
 | **Job send** | `TicketEscalationTest` | Job `handle()` + `Notification::fake()` — both channels become `sent`. |
 | **Show ticket** | `TicketEscalationTest` | `GET /api/tickets/{id}` returns subject and status. |
 | **Schema / relations** | `TicketSchemaTest` | Customer + optional agent + logs. |
+| **Concurrent escalate** | `ConcurrentEscalationTest` | Two overlapping Action calls. One win, one `TicketAlreadyEscalated`. One email log. MySQL + `pcntl` only. |
 
 ## How they are tested
 
 - `Queue::fake()` on the HTTP escalate path: the response has `pending` logs and the jobs are queued, not sent inline.
 - `Notification::fake()` when job `handle()` runs the real Email/Slack adapters.
-- Mockery `EscalationChannel` bound into `EscalationChannelRegistry` to simulate timeout / webhook / mailer failure without hitting the network.
+- `Tests\Support\FakeFlakyChannel` bound into `EscalationChannelRegistry` to control fail/success counts without Email or Slack.
 - Job `handle()` / `failed()` called directly to simulate Laravel's 3 attempts.
+- Concurrent coverage uses `pcntl_fork` and `DatabaseMigrations` (committed rows, two connections). The file skips before connecting when `DB_CONNECTION` is not `mysql` or `pcntl` is missing, so local SQLite (or a missing `pdo_sqlite`) does not fail this case.
 
 ## Self-testing notes
-
-Ran locally after implementation:
 
 ```bash
 cd backend
@@ -36,7 +38,7 @@ cd backend
 ./vendor/bin/pest
 ```
 
-Pint and Larastan passed on this machine. Feature tests use in-memory SQLite (`phpunit.xml`). They need the `pdo_sqlite` PHP extension (installed in CI). Without that extension they fail with `could not find driver` — that is an environment gap, not a failing assertion.
+Feature tests need `pdo_sqlite` locally. CI uses `pdo_mysql` and MySQL 8.4 (`flojics_test`). The concurrency test is skipped locally unless you point Pest at MySQL.
 
 Manual check with a **fresh** MySQL seed (`php artisan migrate:fresh --seed`, database `flojics`):
 
@@ -48,4 +50,4 @@ Manual check with a **fresh** MySQL seed (`php artisan migrate:fresh --seed`, da
 6. `POST /api/tickets/7/escalate` — already escalated in the seeder → `409`
 7. UI: [http://localhost:5173/tickets/4](http://localhost:5173/tickets/4) — Escalate, badges, logs. Ticket `7` shows the button disabled. Ticket `9999` shows the compact 404.
 
-CI (`.github/workflows/ci.yml`) runs Pint, Larastan, and Pest on every push.
+CI (`.github/workflows/ci.yml`) runs Pint, Larastan, and Pest on MySQL on every push.

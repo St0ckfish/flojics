@@ -13,7 +13,7 @@ Escalate a ticket, persist `escalated_at`, and fan out Email + Slack with queued
 | UI | Tailwind CSS 4, shadcn |
 | Data | TanStack Query, Axios, Zod |
 | Quality | oxlint, Prettier, Husky, commitlint, lint-staged, Pint, Pest, Larastan |
-| CI | GitHub Actions (`frontend` + `backend` jobs) |
+| CI | GitHub Actions (`frontend` + `backend` on MySQL 8.4) |
 
 ## Escalation flow
 
@@ -32,12 +32,12 @@ sequenceDiagram
     API->>DB: notification_logs pending
     API->>Q: DispatchEscalationNotificationJob (tries=3)
     API-->>UI: Ticket payload
+    Q->>DB: attempts++
     Q->>Ch: send()
     alt Success
         Q->>DB: status=sent, sent_at
     else Failure
-        Q->>Q: backoff 10s / 30s / 60s
-        Q->>DB: attempts++
+        Q->>Q: backoff 10s / 30s
     else Exhausted
         Q->>DB: status=failed, error_message
     end
@@ -114,6 +114,8 @@ composer lint
 composer analyse
 composer test
 ```
+
+Local `composer test` uses in-memory SQLite (`phpunit.xml`). GitHub Actions runs the same suite on MySQL 8.4 so `lockForUpdate` and `UNIQUE(ticket_id, channel)` are verified on the engine the PDF requires.
 
 Commits must follow [Conventional Commits](https://www.conventionalcommits.org/). Husky runs commitlint and lint-staged from the repo root.
 

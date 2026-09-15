@@ -4,6 +4,7 @@ use App\Enums\TicketStatus;
 use App\Models\Customer;
 use App\Models\NotificationLog;
 use App\Models\Ticket;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -28,4 +29,18 @@ test('a ticket belongs to a customer and can have notification logs', function (
     expect($log)->toBeInstanceOf(NotificationLog::class)
         ->and($ticket->notificationLogs)->toHaveCount(1)
         ->and($log->ticket->is($ticket))->toBeTrue();
+});
+
+test('notification logs are unique per ticket and channel', function () {
+    $ticket = Ticket::factory()->create();
+
+    $ticket->notificationLogs()->create([
+        'channel' => 'email',
+        'status' => 'pending',
+    ]);
+
+    expect(fn () => $ticket->notificationLogs()->create([
+        'channel' => 'email',
+        'status' => 'pending',
+    ]))->toThrow(UniqueConstraintViolationException::class);
 });

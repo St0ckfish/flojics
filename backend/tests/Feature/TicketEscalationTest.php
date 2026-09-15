@@ -96,6 +96,17 @@ test('unknown notification channels are rejected', function () {
     expect($ticket->fresh()->isEscalated())->toBeFalse();
 });
 
+test('duplicate channel keys in the request are rejected', function () {
+    $ticket = Ticket::factory()->create();
+
+    $this->postJson("/api/tickets/{$ticket->id}/escalate", [
+        'channels' => ['email', 'email'],
+    ])->assertUnprocessable();
+
+    expect($ticket->fresh()->isEscalated())->toBeFalse()
+        ->and($ticket->notificationLogs()->count())->toBe(0);
+});
+
 test('a single ticket can be retrieved after seeding', function () {
     $ticket = Ticket::factory()->create([
         'subject' => 'VPN drops every hour',

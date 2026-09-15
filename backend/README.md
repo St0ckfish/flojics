@@ -18,4 +18,4 @@ composer analyse
 composer test
 ```
 
-See the repository root `README.md` and `docs/` for the planned architecture.
+See the repository root `README.md` and `docs/` for architecture, database, and test notes.

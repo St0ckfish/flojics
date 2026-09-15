@@ -8,8 +8,7 @@ use App\NotificationChannels\Contracts\EscalationChannel;
 use App\NotificationChannels\EscalationChannelRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
-use Mockery;
-use RuntimeException;
+use Tests\Support\FakeFlakyChannel;
 
 uses(RefreshDatabase::class);
 
@@ -25,12 +24,7 @@ test('a notification failure leaves the ticket escalated and the log pending', f
     Queue::fake();
 
     $ticket = Ticket::factory()->create();
-
-    $channel = Mockery::mock(EscalationChannel::class);
-    $channel->shouldReceive('key')->andReturn('email');
-    $channel->shouldReceive('send')
-        ->once()
-        ->andThrow(new RuntimeException('Email service unavailable'));
+    $channel = new FakeFlakyChannel(failuresBeforeSuccess: 3, errorMessage: 'Email service unavailable');
     bindChannel($channel);
 
     $this->postJson("/api/tickets/{$ticket->id}/escalate", [
@@ -54,58 +48,53 @@ test('a notification failure leaves the ticket escalated and the log pending', f
 
     expect($log->status)->toBe(NotificationLogStatus::Pending)
         ->and($log->attempts)->toBe(1)
+        ->and($log->error_message)->toBe('Email service unavailable')
         ->and($log->sent_at)->toBeNull();
 });
 
-test('a failed notification is marked sent after a later retry succeeds', function () {
+test('a notification is marked sent on the third attempt after two failures', function () {
     $ticket = Ticket::factory()->escalated()->create();
     $log = $ticket->notificationLogs()->create([
         'channel' => 'email',
         'status' => NotificationLogStatus::Pending,
     ]);
 
-    $attempts = 0;
-
-    $channel = Mockery::mock(EscalationChannel::class);
-    $channel->shouldReceive('key')->andReturn('email');
-    $channel->shouldReceive('send')->twice()->andReturnUsing(function () use (&$attempts): void {
-        $attempts++;
-
-        if ($attempts === 1) {
-            throw new RuntimeException('Timeout');
-        }
-    });
+    $channel = new FakeFlakyChannel(failuresBeforeSuccess: 2, errorMessage: 'Timeout');
     bindChannel($channel);
 
     $job = new DispatchEscalationNotificationJob($ticket->id, 'email', $log->id);
+    $registry = app(EscalationChannelRegistry::class);
 
-    expect(fn () => $job->handle(app(EscalationChannelRegistry::class)))
-        ->toThrow(RuntimeException::class, 'Timeout');
+    expect(fn () => $job->handle($registry))->toThrow(RuntimeException::class, 'Timeout');
+    expect(fn () => $job->handle($registry))->toThrow(RuntimeException::class, 'Timeout');
 
     expect($log->fresh()->status)->toBe(NotificationLogStatus::Pending)
-        ->and($log->fresh()->attempts)->toBe(1);
+        ->and($log->fresh()->attempts)->toBe(2)
+        ->and($log->fresh()->error_message)->toBe('Timeout');
 
-    $job->handle(app(EscalationChannelRegistry::class));
+    $job->handle($registry);
 
     $log->refresh();
 
     expect($log->status)->toBe(NotificationLogStatus::Sent)
-        ->and($log->attempts)->toBe(2)
-        ->and($log->sent_at)->not->toBeNull();
+        ->and($log->attempts)->toBe(3)
+        ->and($log->sent_at)->not->toBeNull()
+        ->and($log->error_message)->toBeNull()
+        ->and($channel->sendCount)->toBe(3);
 });
 
-test('retry exhaustion stores the final failed result', function () {
+test('retry exhaustion stores the final failed result and does not send again', function () {
     $ticket = Ticket::factory()->escalated()->create();
     $log = $ticket->notificationLogs()->create([
         'channel' => 'slack',
         'status' => NotificationLogStatus::Pending,
     ]);
 
-    $channel = Mockery::mock(EscalationChannel::class);
-    $channel->shouldReceive('key')->andReturn('slack');
-    $channel->shouldReceive('send')
-        ->times(3)
-        ->andThrow(new RuntimeException('Slack webhook failure'));
+    $channel = new FakeFlakyChannel(
+        channelKey: 'slack',
+        failuresBeforeSuccess: 3,
+        errorMessage: 'Slack webhook failure',
+    );
     bindChannel($channel);
 
     $job = new DispatchEscalationNotificationJob($ticket->id, 'slack', $log->id);
@@ -113,7 +102,7 @@ test('retry exhaustion stores the final failed result', function () {
 
     $lastError = null;
 
-    for ($i = 0; $i < 3; $i++) {
+    for ($i = 0; $i < $job->tries; $i++) {
         try {
             $job->handle($registry);
         } catch (RuntimeException $e) {
@@ -121,7 +110,8 @@ test('retry exhaustion stores the final failed result', function () {
         }
     }
 
-    expect($lastError)->toBeInstanceOf(RuntimeException::class);
+    expect($lastError)->toBeInstanceOf(RuntimeException::class)
+        ->and($channel->sendCount)->toBe(3);
 
     $job->failed($lastError);
 
@@ -130,5 +120,38 @@ test('retry exhaustion stores the final failed result', function () {
     expect($log->status)->toBe(NotificationLogStatus::Failed)
         ->and($log->attempts)->toBe(3)
         ->and($log->error_message)->toBe('Slack webhook failure')
-        ->and($ticket->fresh()->isEscalated())->toBeTrue();
+        ->and($ticket->fresh()->isEscalated())->toBeTrue()
+        ->and($channel->sendCount)->toBe(3);
+
+    $job->handle($registry);
+
+    expect($channel->sendCount)->toBe(3)
+        ->and($log->fresh()->attempts)->toBe(3)
+        ->and($log->fresh()->status)->toBe(NotificationLogStatus::Failed);
+});
+
+test('a sent log is not delivered again when the job is replayed', function () {
+    $ticket = Ticket::factory()->escalated()->create();
+    $log = $ticket->notificationLogs()->create([
+        'channel' => 'email',
+        'status' => NotificationLogStatus::Sent,
+        'attempts' => 1,
+        'sent_at' => now(),
+    ]);
+
+    $channel = new FakeFlakyChannel(failuresBeforeSuccess: 0);
+    bindChannel($channel);
+
+    (new DispatchEscalationNotificationJob($ticket->id, 'email', $log->id))
+        ->handle(app(EscalationChannelRegistry::class));
+
+    expect($channel->sendCount)->toBe(0)
+        ->and($log->fresh()->attempts)->toBe(1);
+});
+
+test('notification jobs use three attempts and two backoff delays', function () {
+    $job = new DispatchEscalationNotificationJob(1, 'email', 1);
+
+    expect($job->tries)->toBe(3)
+        ->and($job->backoff())->toBe([10, 30]);
 });

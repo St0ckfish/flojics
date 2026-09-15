@@ -4,7 +4,6 @@ namespace App\Notifications;
 
 use App\Enums\EscalationChannelKey;
 use App\Models\Ticket;
-use Illuminate\Bus\Queueable;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 use Illuminate\Notifications\Slack\BlockKit\Blocks\SectionBlock;
@@ -12,8 +11,6 @@ use Illuminate\Notifications\Slack\SlackMessage;
 
 class TicketEscalatedNotification extends Notification
 {
-    use Queueable;
-
     public function __construct(
         public readonly Ticket $ticket,
         public readonly EscalationChannelKey $channel,

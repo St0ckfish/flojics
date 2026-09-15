@@ -2,12 +2,13 @@
 
 namespace App\Actions;
 
-use App\Enums\EscalationChannelKey;
 use App\Enums\NotificationLogStatus;
+use App\Exceptions\TicketAlreadyEscalatedException;
 use App\Exceptions\TicketNotFoundException;
 use App\Jobs\DispatchEscalationNotificationJob;
 use App\Models\Ticket;
 use App\NotificationChannels\EscalationChannelRegistry;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 
 class EscalateTicketAction
@@ -15,7 +16,7 @@ class EscalateTicketAction
     public function __construct(private readonly EscalationChannelRegistry $channels) {}
 
     /**
-     * @param  list<string|EscalationChannelKey>  $channelKeys
+     * @param  list<string>  $channelKeys
      */
     public function execute(int $ticketId, array $channelKeys = []): Ticket
     {
@@ -26,20 +27,28 @@ class EscalateTicketAction
                 throw new TicketNotFoundException($ticketId);
             }
 
+            $resolvedKeys = $this->normalizeChannels($channelKeys);
+
+            foreach ($resolvedKeys as $channelKey) {
+                $this->channels->resolve($channelKey);
+            }
+
             $ticket->markEscalated();
 
-            foreach ($this->normalizeChannels($channelKeys) as $channel) {
-                $this->channels->resolve($channel->value);
-
-                $log = $ticket->notificationLogs()->create([
-                    'channel' => $channel->value,
-                    'status' => NotificationLogStatus::Pending,
-                    'attempts' => 0,
-                ]);
+            foreach ($resolvedKeys as $channelKey) {
+                try {
+                    $log = $ticket->notificationLogs()->create([
+                        'channel' => $channelKey,
+                        'status' => NotificationLogStatus::Pending,
+                        'attempts' => 0,
+                    ]);
+                } catch (UniqueConstraintViolationException) {
+                    throw new TicketAlreadyEscalatedException($ticket->id);
+                }
 
                 DispatchEscalationNotificationJob::dispatch(
                     $ticket->id,
-                    $channel->value,
+                    $channelKey,
                     $log->id,
                 )->afterCommit();
             }
@@ -49,20 +58,15 @@ class EscalateTicketAction
     }
 
     /**
-     * @param  list<string|EscalationChannelKey>  $channelKeys
-     * @return list<EscalationChannelKey>
+     * @param  list<string>  $channelKeys
+     * @return list<string>
      */
     private function normalizeChannels(array $channelKeys): array
     {
         if ($channelKeys === []) {
-            return EscalationChannelKey::cases();
+            return $this->channels->keys();
         }
 
-        return array_map(
-            fn (string|EscalationChannelKey $key): EscalationChannelKey => $key instanceof EscalationChannelKey
-                ? $key
-                : EscalationChannelKey::from($key),
-            $channelKeys,
-        );
+        return array_values(array_unique($channelKeys));
     }
 }

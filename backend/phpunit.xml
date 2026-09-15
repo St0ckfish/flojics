@@ -17,6 +17,7 @@
             <directory>app</directory>
         </include>
     </source>
+    <!-- Local default is SQLite. CI exports DB_* for MySQL 8.4 (not force=true). -->
     <php>
         <env name="APP_ENV" value="testing"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>

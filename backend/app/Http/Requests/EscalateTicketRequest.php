@@ -2,7 +2,7 @@
 
 namespace App\Http\Requests;
 
-use App\Enums\EscalationChannelKey;
+use App\NotificationChannels\EscalationChannelRegistry;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -20,7 +20,7 @@ class EscalateTicketRequest extends FormRequest
     {
         return [
             'channels' => ['sometimes', 'array', 'min:1'],
-            'channels.*' => ['required', 'string', Rule::enum(EscalationChannelKey::class)],
+            'channels.*' => ['required', 'string', 'distinct', Rule::in($this->allowedChannels())],
         ];
     }
 
@@ -32,6 +32,14 @@ class EscalateTicketRequest extends FormRequest
         /** @var list<string>|null $channels */
         $channels = $this->validated('channels');
 
-        return $channels ?? EscalationChannelKey::values();
+        return $channels ?? $this->allowedChannels();
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function allowedChannels(): array
+    {
+        return app(EscalationChannelRegistry::class)->keys();
     }
 }

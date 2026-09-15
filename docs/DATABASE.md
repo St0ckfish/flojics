@@ -78,9 +78,11 @@ Indexes: `tickets(status)`, `tickets(priority)`.
 | `sent_at` | timestamp nullable | Set when status becomes `sent` |
 | `timestamps` | | |
 
-Indexes: `(ticket_id, channel)`, `status`.
+Indexes: `UNIQUE(ticket_id, channel)`, `status`.
 
 `channel` is a free string so a new channel does not need a schema change.
+
+`UNIQUE(ticket_id, channel)` matches the business rule: one escalation per ticket, one outbox row per channel. Re-escalation is rejected (`409`), so a batch id is not needed. Retries update `attempts` on the same row.
 
 ## Why this shape
 
